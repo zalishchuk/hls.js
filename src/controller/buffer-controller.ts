@@ -1376,19 +1376,11 @@ transfer tracks: ${stringify(transferredTracks, (key, value) => (key === 'initSe
     if (!mediaSource || !this.media || mediaSource.readyState !== 'open') {
       return;
     }
-    // DEBUG: iOS 26 cold start investigation
-    this.log(
-      `[iOS26-DEBUG] updateMediaSource: readyState=${mediaSource.readyState}, sbCount=${this.sourceBufferCount} BEFORE setting duration=${duration}`,
-    );
     if (mediaSource.duration !== duration) {
       if (Number.isFinite(duration)) {
         this.log(`Updating MediaSource duration to ${duration.toFixed(3)}`);
       }
       mediaSource.duration = duration;
-      // DEBUG: iOS 26 cold start investigation
-      this.log(
-        `[iOS26-DEBUG] updateMediaSource: readyState=${mediaSource.readyState} AFTER setting duration`,
-      );
     }
     if (start !== undefined && end !== undefined) {
       this.log(
@@ -1470,10 +1462,6 @@ transfer tracks: ${stringify(transferredTracks, (key, value) => (key === 'initSe
     if (!mediaSource) {
       throw new Error('createSourceBuffers called when mediaSource was null');
     }
-    // DEBUG: iOS 26 cold start investigation
-    this.log(
-      `[iOS26-DEBUG] createSourceBuffers: readyState=${mediaSource.readyState} BEFORE creating SourceBuffers`,
-    );
 
     for (const trackName in tracks) {
       const type = trackName as SourceBufferName;
@@ -1489,10 +1477,6 @@ transfer tracks: ${stringify(transferredTracks, (key, value) => (key === 'initSe
           const sb = mediaSource.addSourceBuffer(
             mimeType,
           ) as ExtendedSourceBuffer;
-          // DEBUG: iOS 26 cold start investigation
-          this.log(
-            `[iOS26-DEBUG] createSourceBuffers: readyState=${mediaSource.readyState} AFTER addSourceBuffer(${type})`,
-          );
           const sbIndex = sourceBufferNameToIndex(type);
           const sbTuple = [type, sb] as Exclude<
             SourceBuffersTuple[typeof sbIndex],
@@ -1596,10 +1580,6 @@ transfer tracks: ${stringify(transferredTracks, (key, value) => (key === 'initSe
   // Keep as arrow functions so that we can directly reference these functions directly as event listeners
   private _onMediaSourceOpen = (e?: Event) => {
     const { media, mediaSource } = this;
-    // DEBUG: iOS 26 cold start investigation
-    this.log(
-      `[iOS26-DEBUG] _onMediaSourceOpen: event=${!!e}, readyState=${mediaSource?.readyState}, time=${performance.now().toFixed(2)}`,
-    );
     if (e) {
       this.log('Media source opened');
     }
@@ -1621,18 +1601,10 @@ transfer tracks: ${stringify(transferredTracks, (key, value) => (key === 'initSe
   };
 
   private _onMediaSourceClose = () => {
-    // DEBUG: iOS 26 cold start investigation
-    this.log(
-      `[iOS26-DEBUG] _onMediaSourceClose: time=${performance.now().toFixed(2)}`,
-    );
     this.log('Media source closed');
   };
 
   private _onMediaSourceEnded = () => {
-    // DEBUG: iOS 26 cold start investigation - log stack trace to see what triggered this
-    this.log(
-      `[iOS26-DEBUG] _onMediaSourceEnded: time=${performance.now().toFixed(2)}, stack=${new Error().stack}`,
-    );
     this.log('Media source ended');
   };
 
@@ -1759,11 +1731,6 @@ transfer tracks: ${stringify(transferredTracks, (key, value) => (key === 'initSe
     }
     track.ending = false;
     track.ended = false;
-
-    // DEBUG: iOS 26 cold start investigation - log state immediately before appendBuffer
-    this.log(
-      `[iOS26-DEBUG] appendExecutor ${type}: ms.readyState=${this.mediaSource?.readyState}, sb.updating=${sb.updating}, dataSize=${data.byteLength}`,
-    );
 
     this.doAppendBuffer(sb, data, type, track);
   }
