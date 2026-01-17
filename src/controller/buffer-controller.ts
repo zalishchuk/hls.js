@@ -17,6 +17,7 @@ import {
   getMediaSource,
   isCompatibleTrackChange,
   isManagedMediaSource,
+  warmupManagedMediaSource,
 } from '../utils/mediasource-helper';
 import { stringify } from '../utils/safe-json-stringify';
 import type { FragmentTracker } from './fragment-tracker';
@@ -287,33 +288,59 @@ export default class BufferController extends Logger implements ComponentAPI {
         this.transferData = data;
         this.overrides = data.overrides;
       }
-      const ms = (this.mediaSource = data.mediaSource || new MediaSource());
-      this.assignMediaSource(ms);
-      if (transferringMedia) {
-        this._objectUrl = media.src;
-        this.attachTransferred();
+
+      // iOS/iPadOS 26 cold start workaround (see warmupManagedMediaSource for details)
+      if (
+        this.appendSource &&
+        (self as any).ManagedMediaSource &&
+        !transferringMedia
+      ) {
+        warmupManagedMediaSource(media)
+          .then(() => {
+            this.attachRealMediaSource(media, data, MediaSource);
+          })
+          .catch(() => {
+            this.attachRealMediaSource(media, data, MediaSource);
+          });
       } else {
-        // cache the locally generated object url
-        const objectUrl = (this._objectUrl = self.URL.createObjectURL(ms));
-        // link video and media Source
-        if (this.appendSource) {
-          try {
-            media.removeAttribute('src');
-            // ManagedMediaSource will not open without disableRemotePlayback set to false or source alternatives
-            const MMS = (self as any).ManagedMediaSource;
-            media.disableRemotePlayback =
-              media.disableRemotePlayback || (MMS && ms instanceof MMS);
-            removeSourceChildren(media);
-            addSource(media, objectUrl);
-            media.load();
-          } catch (error) {
-            media.src = objectUrl;
-          }
-        } else {
+        this.attachRealMediaSource(media, data, MediaSource);
+      }
+
+      media.addEventListener('emptied', this._onMediaEmptied);
+    }
+  }
+
+  private attachRealMediaSource(
+    media: HTMLMediaElement,
+    data: MediaAttachingData,
+    MediaSource: typeof globalThis.MediaSource,
+  ) {
+    const transferringMedia = !!data.mediaSource;
+    const ms = (this.mediaSource = data.mediaSource || new MediaSource());
+    this.assignMediaSource(ms);
+    if (transferringMedia) {
+      this._objectUrl = media.src;
+      this.attachTransferred();
+    } else {
+      // cache the locally generated object url
+      const objectUrl = (this._objectUrl = self.URL.createObjectURL(ms));
+      // link video and media Source
+      if (this.appendSource) {
+        try {
+          media.removeAttribute('src');
+          // ManagedMediaSource will not open without disableRemotePlayback set to false or source alternatives
+          const MMS = (self as any).ManagedMediaSource;
+          media.disableRemotePlayback =
+            media.disableRemotePlayback || (MMS && ms instanceof MMS);
+          removeSourceChildren(media);
+          addSource(media, objectUrl);
+          media.load();
+        } catch (error) {
           media.src = objectUrl;
         }
+      } else {
+        media.src = objectUrl;
       }
-      media.addEventListener('emptied', this._onMediaEmptied);
     }
   }
 
@@ -1349,11 +1376,19 @@ transfer tracks: ${stringify(transferredTracks, (key, value) => (key === 'initSe
     if (!mediaSource || !this.media || mediaSource.readyState !== 'open') {
       return;
     }
+    // DEBUG: iOS 26 cold start investigation
+    this.log(
+      `[iOS26-DEBUG] updateMediaSource: readyState=${mediaSource.readyState}, sbCount=${this.sourceBufferCount} BEFORE setting duration=${duration}`,
+    );
     if (mediaSource.duration !== duration) {
       if (Number.isFinite(duration)) {
         this.log(`Updating MediaSource duration to ${duration.toFixed(3)}`);
       }
       mediaSource.duration = duration;
+      // DEBUG: iOS 26 cold start investigation
+      this.log(
+        `[iOS26-DEBUG] updateMediaSource: readyState=${mediaSource.readyState} AFTER setting duration`,
+      );
     }
     if (start !== undefined && end !== undefined) {
       this.log(
@@ -1435,6 +1470,10 @@ transfer tracks: ${stringify(transferredTracks, (key, value) => (key === 'initSe
     if (!mediaSource) {
       throw new Error('createSourceBuffers called when mediaSource was null');
     }
+    // DEBUG: iOS 26 cold start investigation
+    this.log(
+      `[iOS26-DEBUG] createSourceBuffers: readyState=${mediaSource.readyState} BEFORE creating SourceBuffers`,
+    );
 
     for (const trackName in tracks) {
       const type = trackName as SourceBufferName;
@@ -1450,6 +1489,10 @@ transfer tracks: ${stringify(transferredTracks, (key, value) => (key === 'initSe
           const sb = mediaSource.addSourceBuffer(
             mimeType,
           ) as ExtendedSourceBuffer;
+          // DEBUG: iOS 26 cold start investigation
+          this.log(
+            `[iOS26-DEBUG] createSourceBuffers: readyState=${mediaSource.readyState} AFTER addSourceBuffer(${type})`,
+          );
           const sbIndex = sourceBufferNameToIndex(type);
           const sbTuple = [type, sb] as Exclude<
             SourceBuffersTuple[typeof sbIndex],
@@ -1553,6 +1596,10 @@ transfer tracks: ${stringify(transferredTracks, (key, value) => (key === 'initSe
   // Keep as arrow functions so that we can directly reference these functions directly as event listeners
   private _onMediaSourceOpen = (e?: Event) => {
     const { media, mediaSource } = this;
+    // DEBUG: iOS 26 cold start investigation
+    this.log(
+      `[iOS26-DEBUG] _onMediaSourceOpen: event=${!!e}, readyState=${mediaSource?.readyState}, time=${performance.now().toFixed(2)}`,
+    );
     if (e) {
       this.log('Media source opened');
     }
@@ -1574,10 +1621,18 @@ transfer tracks: ${stringify(transferredTracks, (key, value) => (key === 'initSe
   };
 
   private _onMediaSourceClose = () => {
+    // DEBUG: iOS 26 cold start investigation
+    this.log(
+      `[iOS26-DEBUG] _onMediaSourceClose: time=${performance.now().toFixed(2)}`,
+    );
     this.log('Media source closed');
   };
 
   private _onMediaSourceEnded = () => {
+    // DEBUG: iOS 26 cold start investigation - log stack trace to see what triggered this
+    this.log(
+      `[iOS26-DEBUG] _onMediaSourceEnded: time=${performance.now().toFixed(2)}, stack=${new Error().stack}`,
+    );
     this.log('Media source ended');
   };
 
@@ -1705,6 +1760,20 @@ transfer tracks: ${stringify(transferredTracks, (key, value) => (key === 'initSe
     track.ending = false;
     track.ended = false;
 
+    // DEBUG: iOS 26 cold start investigation - log state immediately before appendBuffer
+    this.log(
+      `[iOS26-DEBUG] appendExecutor ${type}: ms.readyState=${this.mediaSource?.readyState}, sb.updating=${sb.updating}, dataSize=${data.byteLength}`,
+    );
+
+    this.doAppendBuffer(sb, data, type, track);
+  }
+
+  private doAppendBuffer(
+    sb: ExtendedSourceBuffer,
+    data: Uint8Array<ArrayBuffer>,
+    type: SourceBufferName,
+    track: SourceBufferTrack,
+  ) {
     if (this.hls.config.appendTimeout !== Infinity) {
       const appendTimeoutTime = this.calculateAppendTimeoutTime(sb);
 
